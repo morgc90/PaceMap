@@ -1,4 +1,6 @@
 import { useState, useEffect, useRef } from "react";
+import { MapContainer, TileLayer, Marker, Popup } from "react-leaflet";
+import L from "leaflet";
 import { RUN_CLUBS, VIBE_TAGS } from "./data/clubs";
 import "./App.css";
 
@@ -132,53 +134,55 @@ function DiscoverScreen({ onClubSelect }) {
   );
 }
 
+function createClubIcon(emoji) {
+  return L.divIcon({
+    html: `<div style="width:34px;height:34px;background:#1a1a1a;border:2px solid #FC4C02;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:15px;cursor:pointer;box-shadow:0 2px 8px rgba(252,76,2,0.5)">${emoji}</div>`,
+    className: "",
+    iconSize: [34, 34],
+    iconAnchor: [17, 17],
+  });
+}
+
 function MapScreen({ onClubSelect }) {
-  const mapRef = useRef(null);
-  const mapInstance = useRef(null);
-
-  useEffect(() => {
-    if (mapInstance.current || !mapRef.current) return;
-
-    const loadLeaflet = () => {
-      if (window.L) { initMap(); return; }
-      const link = document.createElement("link");
-      link.rel = "stylesheet";
-      link.href = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css";
-      document.head.appendChild(link);
-      const script = document.createElement("script");
-      script.src = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js";
-      script.onload = initMap;
-      document.head.appendChild(script);
-    };
-
-    const initMap = () => {
-      if (!mapRef.current || mapInstance.current) return;
-      const L = window.L;
-      const map = L.map(mapRef.current, { center: [30, 10], zoom: 2, zoomControl: false, attributionControl: false });
-      L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", { maxZoom: 18 }).addTo(map);
-
-      RUN_CLUBS.forEach(club => {
-        if (!club.lat || !club.lng) return;
-        const icon = L.divIcon({
-          html: `<div style="width:34px;height:34px;background:#1a1a1a;border:2px solid #FC4C02;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:15px;cursor:pointer;box-shadow:0 2px 8px rgba(252,76,2,0.5)">${club.emoji}</div>`,
-          className: "", iconSize: [34, 34], iconAnchor: [17, 17],
-        });
-        const marker = L.marker([club.lat, club.lng], { icon }).addTo(map);
-        marker.on("click", () => onClubSelect(club));
-      });
-
-      mapInstance.current = map;
-    };
-
-    loadLeaflet();
-    return () => { if (mapInstance.current) { mapInstance.current.remove(); mapInstance.current = null; } };
-  }, []);
+  const validClubs = RUN_CLUBS.filter(c => c.lat && c.lng);
 
   return (
     <div className="screen map-screen">
-      <div className="top-bar"><div className="pm-logo">PM</div><div className="top-title">WORLD MAP</div><div className="top-icon"><i className="ti ti-current-location" aria-hidden="true" /></div></div>
-      <div className="map-container" ref={mapRef} />
-      <div className="map-legend"><div className="legend-title">🔴 {RUN_CLUBS.length} clubs worldwide</div><div className="legend-sub">Tap a pin to view club details</div></div>
+      <div className="top-bar">
+        <div className="pm-logo">PM</div>
+        <div className="top-title">WORLD MAP</div>
+        <div className="top-icon"><i className="ti ti-current-location" aria-hidden="true" /></div>
+      </div>
+      <div className="map-container">
+        <MapContainer
+          center={[48, 10]}
+          zoom={3}
+          style={{ width: "100%", height: "100%" }}
+          zoomControl={false}
+          attributionControl={false}
+        >
+          <TileLayer url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png" maxZoom={18} />
+          {validClubs.map(club => (
+            <Marker
+              key={club.id}
+              position={[club.lat, club.lng]}
+              icon={createClubIcon(club.emoji)}
+              eventHandlers={{ click: () => onClubSelect(club) }}
+            >
+              <Popup>
+                <div style={{fontFamily:"sans-serif",fontSize:13,color:"#fff",background:"#1a1a1a",padding:"6px 8px",borderRadius:8,minWidth:120}}>
+                  <strong>{club.name}</strong><br/>
+                  <span style={{color:"#FC4C02"}}>{club.city}</span>
+                </div>
+              </Popup>
+            </Marker>
+          ))}
+        </MapContainer>
+      </div>
+      <div className="map-legend">
+        <div className="legend-title">🔴 {validClubs.length} clubs worldwide</div>
+        <div className="legend-sub">Tap a pin to view club details</div>
+      </div>
       <div className="nearby-strip">
         {RUN_CLUBS.filter(c => c.city === "Dublin").map(c => (
           <div key={c.id} className="nearby-pill" onClick={() => onClubSelect(c)}>{c.emoji} {c.name}</div>
