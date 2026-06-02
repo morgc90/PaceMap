@@ -1,16 +1,28 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { MapContainer, TileLayer, Marker, Popup } from "react-leaflet";
 import L from "leaflet";
 import { RUN_CLUBS, VIBE_TAGS } from "./data/clubs";
+import {
+  supabase,
+  signInWithGoogle,
+  signInWithApple,
+  signInWithEmail,
+  signOut,
+  getProfile,
+  upsertProfile,
+  getSavedClubs,
+  saveClub,
+  unsaveClub,
+} from "./supabase";
 import "./App.css";
 
 // ─── Static data ──────────────────────────────────────────────────────────────
 const USERS = [
-  { id: 1, name: "Sarah Chen", handle: "@sarahchen", avatar: "SC", city: "London", following: false, clubs: 8, trips: 3, bio: "Marathon runner. London → Tokyo 2026 🎌", mutual: 2 },
-  { id: 2, name: "David Murphy", handle: "@dmurph", avatar: "DM", city: "Dublin", following: true, clubs: 12, trips: 5, bio: "Mild Activity crew. Dublin native 🍕", mutual: 5 },
-  { id: 3, name: "Ana García", handle: "@anagarcia", avatar: "AG", city: "Madrid", following: false, clubs: 6, trips: 2, bio: "TRC Madrid captain. Ultra runner 🏔️", mutual: 1 },
-  { id: 4, name: "Tom Walsh", handle: "@tomwalsh", avatar: "TW", city: "Dublin", following: true, clubs: 9, trips: 4, bio: "FROLIK Valencia every summer ☀️", mutual: 8 },
-  { id: 5, name: "Mei Tanaka", handle: "@meitanaka", avatar: "MT", city: "Tokyo", following: false, clubs: 14, trips: 7, bio: "080Tokyo crew. World run club collector 🌍", mutual: 0 },
+  { id: 1, name: "Sarah Chen", handle: "@sarahchen", avatar: "SC", city: "London", following: false, clubs: 8, trips: 3, mutual: 2 },
+  { id: 2, name: "David Murphy", handle: "@dmurph", avatar: "DM", city: "Dublin", following: true, clubs: 12, trips: 5, mutual: 5 },
+  { id: 3, name: "Ana García", handle: "@anagarcia", avatar: "AG", city: "Madrid", following: false, clubs: 6, trips: 2, mutual: 1 },
+  { id: 4, name: "Tom Walsh", handle: "@tomwalsh", avatar: "TW", city: "Dublin", following: true, clubs: 9, trips: 4, mutual: 8 },
+  { id: 5, name: "Mei Tanaka", handle: "@meitanaka", avatar: "MT", city: "Tokyo", following: false, clubs: 14, trips: 7, mutual: 0 },
 ];
 
 const ACTIVITY_FEED = [
@@ -21,7 +33,7 @@ const ACTIVITY_FEED = [
   { id: 5, user: USERS[4], action: "saved", club: "080Tokyo", city: "Tokyo", time: "3h ago", emoji: "🗾" },
 ];
 
-const MESSAGES = [
+const MESSAGES_DATA = [
   { id: 1, user: USERS[1], last: "Are you doing the Wednesday pizza run?", time: "2m", unread: 2 },
   { id: 2, user: USERS[3], last: "FROLIK Tuesday is incredible 🔥", time: "1h", unread: 0 },
   { id: 3, user: USERS[0], last: "See you at Midnight Runners!", time: "3h", unread: 1 },
@@ -29,9 +41,7 @@ const MESSAGES = [
 ];
 
 const SAMPLE_TRIP = {
-  name: "Europe Summer Tour",
-  dates: "Jun 14 – Jul 2",
-  isPublic: true,
+  name: "Europe Summer Tour", dates: "Jun 14 – Jul 2", isPublic: true,
   stops: [
     { city: "Dublin", date: "Jun 14", club: "Mild Activity", time: "9am", done: true, emoji: "🍕", alsoGoing: [USERS[1], USERS[3]] },
     { city: "London", date: "Jun 19", club: "Midnight Runners", time: "7pm", done: true, emoji: "🎶", alsoGoing: [USERS[0]] },
@@ -42,7 +52,6 @@ const SAMPLE_TRIP = {
 
 const CITIES_LIST = ["Dublin", "London", "Madrid", "Barcelona", "Valencia", "Amsterdam", "Paris", "New York", "Bangkok", "Rome", "Milan", "Lisbon", "Berlin", "Vienna", "Stockholm", "Other"];
 const PACE_OPTIONS = ["<5:00 /km", "5:00–5:30 /km", "5:30–6:30 /km", "6:30–7:30 /km", "7:30+ /km", "Just vibes 🤙"];
-
 const PRESET_AVATARS = [
   { id: "a", bg: "linear-gradient(135deg,#FC4C02,#ff8c00)" },
   { id: "b", bg: "linear-gradient(135deg,#6366f1,#8b5cf6)" },
@@ -53,9 +62,51 @@ const PRESET_AVATARS = [
 ];
 
 // ─── Auth screens ─────────────────────────────────────────────────────────────
-function SignInScreen({ onSignIn }) {
+function SignInScreen({ onEmailSent }) {
   const [emailMode, setEmailMode] = useState(false);
   const [email, setEmail] = useState("");
+  const [loading, setLoading] = useState(null); // "google" | "apple" | "email"
+  const [emailSent, setEmailSent] = useState(false);
+  const [error, setError] = useState(null);
+
+  const handleGoogle = async () => {
+    setLoading("google"); setError(null);
+    const { error } = await signInWithGoogle();
+    if (error) { setError(error.message); setLoading(null); }
+    // On success the page redirects — no need to clear loading
+  };
+
+  const handleApple = async () => {
+    setLoading("apple"); setError(null);
+    const { error } = await signInWithApple();
+    if (error) { setError(error.message); setLoading(null); }
+  };
+
+  const handleEmail = async () => {
+    if (!email) return;
+    setLoading("email"); setError(null);
+    const { error } = await signInWithEmail(email);
+    if (error) { setError(error.message); setLoading(null); }
+    else { setEmailSent(true); setLoading(null); }
+  };
+
+  if (emailSent) return (
+    <div className="auth-screen">
+      <div className="auth-bg" />
+      <div className="auth-content">
+        <div className="auth-logo-wrap">
+          <div className="auth-logo">PM</div>
+          <div className="auth-wordmark">PACEMAP</div>
+        </div>
+        <div className="auth-card" style={{ textAlign: "center", gap: 16 }}>
+          <div style={{ fontSize: 40 }}>📬</div>
+          <div className="onboard-title">Check your email</div>
+          <div className="onboard-sub">We sent a magic link to <strong style={{ color: "#fff" }}>{email}</strong>. Tap it to sign in — no password needed.</div>
+          <button className="auth-link" onClick={() => setEmailSent(false)}>Use a different email</button>
+        </div>
+      </div>
+    </div>
+  );
 
   return (
     <div className="auth-screen">
@@ -70,11 +121,13 @@ function SignInScreen({ onSignIn }) {
         <div className="auth-card">
           <div className="auth-card-title">Get started</div>
 
-          <button className="auth-btn passkey-btn" onClick={() => onSignIn("passkey")}>
+          {error && <div className="auth-error">{error}</div>}
+
+          {/* Passkey / Face ID note */}
+          <button className="auth-btn passkey-btn" onClick={handleGoogle} disabled={!!loading}>
             <span className="auth-btn-icon">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="12" cy="8" r="4"/>
-                <path d="M6 20v-2a6 6 0 0 1 12 0v2"/>
+                <circle cx="12" cy="8" r="4"/><path d="M6 20v-2a6 6 0 0 1 12 0v2"/>
                 <path d="M9 12.5C9 14 10.5 16 12 16s3-2 3-3.5"/>
               </svg>
             </span>
@@ -84,16 +137,16 @@ function SignInScreen({ onSignIn }) {
 
           <div className="auth-divider"><span>or</span></div>
 
-          <button className="auth-btn apple-btn" onClick={() => onSignIn("apple")}>
+          <button className="auth-btn apple-btn" onClick={handleApple} disabled={!!loading}>
             <span className="auth-btn-icon">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
                 <path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/>
               </svg>
             </span>
-            <span className="auth-btn-label">Continue with Apple</span>
+            <span className="auth-btn-label">{loading === "apple" ? "Redirecting…" : "Continue with Apple"}</span>
           </button>
 
-          <button className="auth-btn google-btn" onClick={() => onSignIn("google")}>
+          <button className="auth-btn google-btn" onClick={handleGoogle} disabled={!!loading}>
             <span className="auth-btn-icon">
               <svg width="18" height="18" viewBox="0 0 24 24">
                 <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
@@ -102,15 +155,17 @@ function SignInScreen({ onSignIn }) {
                 <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
               </svg>
             </span>
-            <span className="auth-btn-label">Continue with Google</span>
+            <span className="auth-btn-label">{loading === "google" ? "Redirecting…" : "Continue with Google"}</span>
           </button>
 
           {!emailMode ? (
             <button className="auth-link" onClick={() => setEmailMode(true)}>Continue with email →</button>
           ) : (
             <div className="email-form">
-              <input className="email-input" type="email" placeholder="your@email.com" value={email} onChange={e => setEmail(e.target.value)} onKeyDown={e => e.key === "Enter" && email && onSignIn("email")} autoFocus />
-              <button className="email-submit" disabled={!email} onClick={() => email && onSignIn("email")}>→</button>
+              <input className="email-input" type="email" placeholder="your@email.com" value={email} onChange={e => setEmail(e.target.value)} onKeyDown={e => e.key === "Enter" && handleEmail()} autoFocus />
+              <button className="email-submit" disabled={!email || loading === "email"} onClick={handleEmail}>
+                {loading === "email" ? "…" : "→"}
+              </button>
             </div>
           )}
         </div>
@@ -120,15 +175,16 @@ function SignInScreen({ onSignIn }) {
   );
 }
 
-function OnboardingScreen({ method, onComplete }) {
+function OnboardingScreen({ session, onComplete }) {
   const [step, setStep] = useState(1);
-  const [name, setName] = useState("");
+  const [name, setName] = useState(session?.user?.user_metadata?.full_name || session?.user?.user_metadata?.name || "");
   const [handle, setHandle] = useState("");
   const [city, setCity] = useState("");
   const [pace, setPace] = useState("");
   const [vibes, setVibes] = useState([]);
-  const [photoSrc, setPhotoSrc] = useState(null);
+  const [photoSrc, setPhotoSrc] = useState(session?.user?.user_metadata?.avatar_url || null);
   const [presetId, setPresetId] = useState("a");
+  const [saving, setSaving] = useState(false);
 
   const autoHandle = n => "@" + n.toLowerCase().replace(/\s+/g, "").slice(0, 16);
   const toggleVibe = id => setVibes(p => p.includes(id) ? p.filter(x => x !== id) : p.length < 5 ? [...p, id] : p);
@@ -141,6 +197,23 @@ function OnboardingScreen({ method, onComplete }) {
     const reader = new FileReader();
     reader.onload = ev => setPhotoSrc(ev.target.result);
     reader.readAsDataURL(file);
+  };
+
+  const handleFinish = async () => {
+    setSaving(true);
+    const profile = {
+      id: session.user.id,
+      name,
+      handle: handle || autoHandle(name),
+      city,
+      pace,
+      vibes,
+      preset_bg: selectedPreset.bg,
+      avatar_url: photoSrc,
+    };
+    const { data, error } = await upsertProfile(profile);
+    setSaving(false);
+    if (!error) onComplete(data || profile);
   };
 
   return (
@@ -164,7 +237,6 @@ function OnboardingScreen({ method, onComplete }) {
               <input id="avatar-upload" type="file" accept="image/*" style={{ display: "none" }} onChange={handlePhotoChange} />
               {photoSrc && <button className="avatar-remove-btn" onClick={() => setPhotoSrc(null)}>Remove photo</button>}
             </div>
-
             {!photoSrc && (
               <div className="avatar-presets">
                 <div className="avatar-presets-lbl">PICK A COLOUR</div>
@@ -175,7 +247,6 @@ function OnboardingScreen({ method, onComplete }) {
                 </div>
               </div>
             )}
-
             <div className="onboard-title">What's your name?</div>
             <div className="onboard-sub">This is how other runners will find you</div>
             <input className="onboard-input" placeholder="Full name" value={name} onChange={e => { setName(e.target.value); setHandle(autoHandle(e.target.value)); }} autoFocus />
@@ -217,9 +288,8 @@ function OnboardingScreen({ method, onComplete }) {
             </div>
             <div className="onboard-row">
               <button className="onboard-back" onClick={() => setStep(2)}>← Back</button>
-              <button className="onboard-next flex1" disabled={vibes.length === 0}
-                onClick={() => onComplete({ name, handle: handle || autoHandle(name), city, pace, vibes, initials, photo: photoSrc, preset: selectedPreset, method })}>
-                Start running 🏃
+              <button className="onboard-next flex1" disabled={vibes.length === 0 || saving} onClick={handleFinish}>
+                {saving ? "Saving…" : "Start running 🏃"}
               </button>
             </div>
           </div>
@@ -231,12 +301,14 @@ function OnboardingScreen({ method, onComplete }) {
 
 // ─── Shared components ────────────────────────────────────────────────────────
 function Avatar({ user, size = 36 }) {
-  if (user.photo) return <img src={user.photo} alt={user.name} className="avatar" style={{ width: size, height: size, objectFit: "cover" }} />;
-  const bg = user.preset?.bg || "var(--o)";
+  const src = user.avatar_url || user.photo;
+  if (src) return <img src={src} alt={user.name} className="avatar" style={{ width: size, height: size, objectFit: "cover" }} />;
+  const bg = user.preset_bg || user.preset?.bg || "var(--o)";
   return <div className="avatar" style={{ width: size, height: size, fontSize: size * 0.35, background: bg }}>{user.initials || user.avatar || "?"}</div>;
 }
 
-function ClubCard({ club, onSelect }) {
+function ClubCard({ club, onSelect, savedIds, onSaveToggle, userId }) {
+  const isSaved = savedIds?.has(club.id);
   return (
     <div className="club-card" onClick={() => onSelect(club)}>
       <div className="club-emoji-wrap"><span>{club.emoji}</span></div>
@@ -248,13 +320,19 @@ function ClubCard({ club, onSelect }) {
           {club.free && <span className="free-tag">FREE</span>}
         </div>
       </div>
+      {userId && onSaveToggle && (
+        <button className={`save-quick-btn ${isSaved ? "saved" : ""}`}
+          onClick={e => { e.stopPropagation(); onSaveToggle(club.id, isSaved); }}>
+          <i className={`ti ti-${isSaved ? "heart-filled" : "heart"}`} />
+        </button>
+      )}
       <div className="club-chev"><i className="ti ti-chevron-right" /></div>
     </div>
   );
 }
 
-function ClubDetail({ club, onBack }) {
-  const [saved, setSaved] = useState(false);
+function ClubDetail({ club, onBack, savedIds, onSaveToggle, userId }) {
+  const isSaved = savedIds?.has(club.id);
   return (
     <div className="screen detail-screen">
       <div className="detail-hero">
@@ -283,16 +361,18 @@ function ClubDetail({ club, onBack }) {
       <div className="detail-actions">
         {club.instagram && <button className="act-btn ig-btn"><i className="ti ti-brand-instagram" /><span>Follow</span></button>}
         {club.whatsapp && <button className="act-btn wa-btn"><i className="ti ti-brand-whatsapp" /><span>WhatsApp</span></button>}
-        <button className={`act-btn ${saved ? "saved-btn" : "join-btn"}`} onClick={() => setSaved(!saved)}>
-          <i className={`ti ti-${saved ? "check" : "plus"}`} /><span>{saved ? "Saved" : "Save"}</span>
-        </button>
+        {userId && (
+          <button className={`act-btn ${isSaved ? "saved-btn" : "join-btn"}`} onClick={() => onSaveToggle(club.id, isSaved)}>
+            <i className={`ti ti-${isSaved ? "heart-filled" : "heart"}`} /><span>{isSaved ? "Saved" : "Save"}</span>
+          </button>
+        )}
       </div>
     </div>
   );
 }
 
 // ─── Main screens ─────────────────────────────────────────────────────────────
-function DiscoverScreen({ onClubSelect }) {
+function DiscoverScreen({ onClubSelect, savedIds, onSaveToggle, userId }) {
   const [search, setSearch] = useState("");
   const [activeCity, setActiveCity] = useState("All");
   const [activeTags, setActiveTags] = useState([]);
@@ -320,7 +400,7 @@ function DiscoverScreen({ onClubSelect }) {
         <div className="notif-body"><div className="notif-title">You're in Dublin tomorrow!</div><div className="notif-sub">Mild Activity meets Sun 9am → Bambino 🍕</div></div>
       </div>
       <div className="sec-head"><span className="sec-lbl">{filtered.length} CLUBS</span><button className="sec-btn"><i className="ti ti-adjustments-horizontal" /> Filter</button></div>
-      <div className="clubs-list">{filtered.map(c => <ClubCard key={c.id} club={c} onSelect={onClubSelect} />)}</div>
+      <div className="clubs-list">{filtered.map(c => <ClubCard key={c.id} club={c} onSelect={onClubSelect} savedIds={savedIds} onSaveToggle={onSaveToggle} userId={userId} />)}</div>
     </div>
   );
 }
@@ -381,9 +461,7 @@ function TripScreen({ onClubSelect }) {
                 <div className={`stop-dot ${stop.done ? "done" : ""}`} />
                 <div className="stop-info">
                   <div className="stop-city">{stop.city}</div>
-                  <div className="stop-detail">
-                    {stop.club ? `${stop.emoji} ${stop.club} · ${stop.time}` : <span style={{color:"#FC4C02"}}>No club selected</span>}
-                  </div>
+                  <div className="stop-detail">{stop.club ? `${stop.emoji} ${stop.club} · ${stop.time}` : <span style={{color:"#FC4C02"}}>No club selected</span>}</div>
                   {stop.alsoGoing.length > 0 && (
                     <div className="also-going">
                       {stop.alsoGoing.slice(0,3).map(u => <div key={u.id} className="mini-avatar">{u.avatar}</div>)}
@@ -484,7 +562,7 @@ function MessagesScreen() {
     <div className="screen">
       <div className="top-bar"><div className="top-title">MESSAGES</div><div className="top-icon"><i className="ti ti-edit" /></div></div>
       <div className="msg-list">
-        {MESSAGES.map(m => (
+        {MESSAGES_DATA.map(m => (
           <div key={m.id} className="msg-row" onClick={() => setActiveConvo(m)}>
             <div style={{position:"relative"}}><Avatar user={m.user} size={44} />{m.unread > 0 && <div className="unread-badge">{m.unread}</div>}</div>
             <div className="msg-info"><div className="msg-name">{m.user.name}</div><div className="msg-preview">{m.last}</div></div>
@@ -496,11 +574,11 @@ function MessagesScreen() {
   );
 }
 
-function ProfileScreen({ currentUser, onSignOut }) {
-  const matchedClubs = RUN_CLUBS.filter(c => currentUser.vibes?.some(v => c.tags?.includes(v))).slice(0, 3);
-  const displayClubs = matchedClubs.length > 0 ? matchedClubs : RUN_CLUBS.slice(0, 3);
-  const authLabel = { passkey: "Face ID / Passkey", apple: "Apple", google: "Google", email: "Email" }[currentUser.method] || "Email";
-  const authIcon = { passkey: "ti-fingerprint", apple: "ti-brand-apple", google: "ti-brand-google", email: "ti-mail" }[currentUser.method] || "ti-mail";
+function ProfileScreen({ profile, savedIds, onSignOut }) {
+  const savedClubs = RUN_CLUBS.filter(c => savedIds?.has(c.id));
+  const suggestedClubs = RUN_CLUBS.filter(c => profile.vibes?.some(v => c.tags?.includes(v))).slice(0, 3);
+  const displayClubs = savedClubs.length > 0 ? savedClubs.slice(0, 3) : suggestedClubs.length > 0 ? suggestedClubs : RUN_CLUBS.slice(0, 3);
+  const sectionLabel = savedClubs.length > 0 ? "SAVED CLUBS" : "CLUBS FOR YOU";
 
   return (
     <div className="screen">
@@ -509,17 +587,20 @@ function ProfileScreen({ currentUser, onSignOut }) {
         <button className="signout-btn" onClick={onSignOut} title="Sign out"><i className="ti ti-logout" /></button>
       </div>
       <div className="profile-hero">
-        {currentUser.photo
-          ? <img src={currentUser.photo} alt="profile" className="profile-avatar profile-avatar-photo" />
-          : <div className="profile-avatar" style={{ background: currentUser.preset?.bg || "var(--o)" }}>{currentUser.initials || "?"}</div>
+        {profile.avatar_url
+          ? <img src={profile.avatar_url} alt="profile" className="profile-avatar profile-avatar-photo" />
+          : <div className="profile-avatar" style={{ background: profile.preset_bg || "var(--o)" }}>
+              {profile.name?.split(" ").map(w => w[0]).join("").slice(0,2).toUpperCase() || "?"}
+            </div>
         }
-        <div className="profile-name">{currentUser.name || "Runner"}</div>
-        <div className="profile-handle">{currentUser.handle || "@runner"} · {currentUser.city || "Everywhere"}</div>
+        <div className="profile-name">{profile.name || "Runner"}</div>
+        <div className="profile-handle">{profile.handle || "@runner"} · {profile.city || "Everywhere"}</div>
         <div className="profile-bio">
-          {currentUser.vibes?.slice(0,3).map(id => VIBE_TAGS.find(v => v.id === id)?.emoji).join(" ")} Pace: {currentUser.pace || "—"}
+          {profile.vibes?.slice(0,3).map(id => VIBE_TAGS.find(v => v.id === id)?.emoji).join(" ")}
+          {profile.pace ? ` · ${profile.pace}` : ""}
         </div>
         <div className="profile-stats">
-          <div className="pstat"><div className="pstat-val">0</div><div className="pstat-lbl">Clubs</div></div>
+          <div className="pstat"><div className="pstat-val">{savedIds?.size || 0}</div><div className="pstat-lbl">Saved</div></div>
           <div className="pstat-div" />
           <div className="pstat"><div className="pstat-val">1</div><div className="pstat-lbl">Cities</div></div>
           <div className="pstat-div" />
@@ -528,10 +609,7 @@ function ProfileScreen({ currentUser, onSignOut }) {
           <div className="pstat"><div className="pstat-val">0</div><div className="pstat-lbl">Following</div></div>
         </div>
       </div>
-      <div className="auth-badge-row">
-        <div className="auth-badge"><i className={`ti ${authIcon}`} /><span>Signed in with {authLabel}</span></div>
-      </div>
-      <div className="sec-head"><span className="sec-lbl">CLUBS FOR YOU</span></div>
+      <div className="sec-head"><span className="sec-lbl">{sectionLabel}</span></div>
       {displayClubs.map(c => (
         <div key={c.id} className="club-card" style={{margin:"0 16px 8px"}}>
           <div className="club-emoji-wrap"><span>{c.emoji}</span></div>
@@ -540,11 +618,24 @@ function ProfileScreen({ currentUser, onSignOut }) {
       ))}
       <div className="sec-head" style={{marginTop:8}}><span className="sec-lbl">PACE PREFERENCES</span></div>
       <div className="pace-card">
-        {[["Preferred pace", currentUser.pace || "—"], ["Vibes", currentUser.vibes?.slice(0,3).map(id => VIBE_TAGS.find(v => v.id === id)?.emoji).join(" ") || "—"], ["Home city", currentUser.city || "—"], ["Trips planned", "0"]].map(([l,v]) => (
+        {[["Preferred pace", profile.pace || "—"], ["Vibes", profile.vibes?.slice(0,3).map(id => VIBE_TAGS.find(v => v.id === id)?.emoji).join(" ") || "—"], ["Home city", profile.city || "—"]].map(([l,v]) => (
           <div key={l} className="pace-row"><span className="pace-lbl">{l}</span><span className="pace-val">{v}</span></div>
         ))}
       </div>
       <div style={{height:24}} />
+    </div>
+  );
+}
+
+// ─── Loading screen ───────────────────────────────────────────────────────────
+function LoadingScreen() {
+  return (
+    <div className="auth-screen">
+      <div className="auth-bg" />
+      <div className="auth-content">
+        <div className="auth-logo">PM</div>
+        <div className="loading-dots"><span /><span /><span /></div>
+      </div>
     </div>
   );
 }
@@ -559,61 +650,108 @@ const TABS = [
 ];
 
 export default function App() {
-  const [authState, setAuthState] = useState("signin"); // "signin" | "onboarding" | "app"
-  const [pendingMethod, setPendingMethod] = useState(null);
-  const [currentUser, setCurrentUser] = useState(null);
+  const [authState, setAuthState] = useState("loading"); // loading | signin | onboarding | app
+  const [session, setSession] = useState(null);
+  const [profile, setProfile] = useState(null);
+  const [savedIds, setSavedIds] = useState(new Set());
   const [tab, setTab] = useState("discover");
   const [selectedClub, setSelectedClub] = useState(null);
 
-  const handleSignIn = method => { setPendingMethod(method); setAuthState("onboarding"); };
-  const handleOnboardingComplete = profile => { setCurrentUser(profile); setAuthState("app"); };
-  const handleSignOut = () => { setCurrentUser(null); setPendingMethod(null); setAuthState("signin"); setTab("discover"); setSelectedClub(null); };
+  // ── Load session on mount ──────────────────────────────────────────────────
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      handleSession(session);
+    });
 
-  const phoneContent = () => {
-    if (authState === "signin") return <SignInScreen onSignIn={handleSignIn} />;
-    if (authState === "onboarding") return <OnboardingScreen method={pendingMethod} onComplete={handleOnboardingComplete} />;
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      handleSession(session);
+    });
 
-    if (selectedClub) return (
-      <>
-        <div className="screen-content"><ClubDetail club={selectedClub} onBack={() => setSelectedClub(null)} /></div>
-        <div className="tab-bar">
-          {TABS.map(t => <button key={t.id} className={`tab-item ${tab === t.id ? "active" : ""}`} onClick={() => { setSelectedClub(null); setTab(t.id); }}><i className={`ti ${t.icon}`} /><span>{t.label}</span></button>)}
-          <button className={`tab-item ${tab === "profile" ? "active" : ""}`} onClick={() => { setSelectedClub(null); setTab("profile"); }}>
-            {currentUser?.photo ? <img src={currentUser.photo} alt="me" className="tab-avatar tab-avatar-photo" /> : <div className="tab-avatar" style={{ background: currentUser?.preset?.bg || "var(--o)" }}>{currentUser?.initials || "?"}</div>}
-            <span>Profile</span>
-          </button>
-        </div>
-      </>
-    );
+    return () => subscription.unsubscribe();
+  }, []);
 
-    return (
-      <>
-        <div className="screen-content">
-          {tab === "discover" && <DiscoverScreen onClubSelect={setSelectedClub} />}
-          {tab === "map" && <MapScreen onClubSelect={setSelectedClub} />}
-          {tab === "trip" && <TripScreen onClubSelect={setSelectedClub} />}
-          {tab === "social" && <SocialScreen />}
-          {tab === "messages" && <MessagesScreen />}
-          {tab === "profile" && <ProfileScreen currentUser={currentUser} onSignOut={handleSignOut} />}
-        </div>
-        <div className="tab-bar">
-          {TABS.map(t => <button key={t.id} className={`tab-item ${tab === t.id ? "active" : ""}`} onClick={() => setTab(t.id)}><i className={`ti ${t.icon}`} /><span>{t.label}</span></button>)}
-          <button className={`tab-item ${tab === "profile" ? "active" : ""}`} onClick={() => setTab("profile")}>
-            {currentUser?.photo ? <img src={currentUser.photo} alt="me" className="tab-avatar tab-avatar-photo" /> : <div className="tab-avatar" style={{ background: currentUser?.preset?.bg || "var(--o)" }}>{currentUser?.initials || "?"}</div>}
-            <span>Profile</span>
-          </button>
-        </div>
-      </>
-    );
+  const handleSession = async (session) => {
+    if (!session) { setAuthState("signin"); setSession(null); setProfile(null); return; }
+    setSession(session);
+    // Check if profile exists
+    const { data } = await getProfile(session.user.id);
+    if (data && data.name) {
+      setProfile(data);
+      await loadSavedClubs(session.user.id);
+      setAuthState("app");
+    } else {
+      setAuthState("onboarding");
+    }
   };
 
-  return (
-    <div className="app">
-      <div className="phone-frame">
-        <div className="phone-screen">
-          {phoneContent()}
-        </div>
-      </div>
+  const loadSavedClubs = async (userId) => {
+    const { data } = await getSavedClubs(userId);
+    if (data) setSavedIds(new Set(data.map(r => r.club_id)));
+  };
+
+  const handleOnboardingComplete = async (prof) => {
+    setProfile(prof);
+    await loadSavedClubs(session.user.id);
+    setAuthState("app");
+  };
+
+  const handleSignOut = async () => {
+    await signOut();
+    setProfile(null); setSession(null); setSavedIds(new Set());
+    setTab("discover"); setSelectedClub(null);
+    setAuthState("signin");
+  };
+
+  const handleSaveToggle = async (clubId, isSaved) => {
+    if (!session) return;
+    const userId = session.user.id;
+    if (isSaved) {
+      setSavedIds(prev => { const s = new Set(prev); s.delete(clubId); return s; });
+      await unsaveClub(userId, clubId);
+    } else {
+      setSavedIds(prev => new Set([...prev, clubId]));
+      await saveClub(userId, clubId);
+    }
+  };
+
+  // ── Render ─────────────────────────────────────────────────────────────────
+  const tabAvatar = () => {
+    if (!profile) return <div className="tab-avatar">?</div>;
+    if (profile.avatar_url) return <img src={profile.avatar_url} alt="me" className="tab-avatar tab-avatar-photo" />;
+    return <div className="tab-avatar" style={{ background: profile.preset_bg || "var(--o)" }}>{profile.name?.split(" ").map(w => w[0]).join("").slice(0,2).toUpperCase() || "?"}</div>;
+  };
+
+  const renderTabBar = () => (
+    <div className="tab-bar">
+      {TABS.map(t => <button key={t.id} className={`tab-item ${tab === t.id ? "active" : ""}`} onClick={() => { setSelectedClub(null); setTab(t.id); }}><i className={`ti ${t.icon}`} /><span>{t.label}</span></button>)}
+      <button className={`tab-item ${tab === "profile" ? "active" : ""}`} onClick={() => { setSelectedClub(null); setTab("profile"); }}>
+        {tabAvatar()}<span>Profile</span>
+      </button>
     </div>
+  );
+
+  if (authState === "loading") return <div className="app"><div className="phone-frame"><div className="phone-screen"><LoadingScreen /></div></div></div>;
+  if (authState === "signin") return <div className="app"><div className="phone-frame"><div className="phone-screen"><SignInScreen /></div></div></div>;
+  if (authState === "onboarding") return <div className="app"><div className="phone-frame"><div className="phone-screen"><OnboardingScreen session={session} onComplete={handleOnboardingComplete} /></div></div></div>;
+
+  if (selectedClub) return (
+    <div className="app"><div className="phone-frame"><div className="phone-screen">
+      <div className="screen-content"><ClubDetail club={selectedClub} onBack={() => setSelectedClub(null)} savedIds={savedIds} onSaveToggle={handleSaveToggle} userId={session?.user?.id} /></div>
+      {renderTabBar()}
+    </div></div></div>
+  );
+
+  return (
+    <div className="app"><div className="phone-frame"><div className="phone-screen">
+      <div className="screen-content">
+        {tab === "discover" && <DiscoverScreen onClubSelect={setSelectedClub} savedIds={savedIds} onSaveToggle={handleSaveToggle} userId={session?.user?.id} />}
+        {tab === "map" && <MapScreen onClubSelect={setSelectedClub} />}
+        {tab === "trip" && <TripScreen onClubSelect={setSelectedClub} />}
+        {tab === "social" && <SocialScreen />}
+        {tab === "messages" && <MessagesScreen />}
+        {tab === "profile" && <ProfileScreen profile={profile} savedIds={savedIds} onSignOut={handleSignOut} />}
+      </div>
+      {renderTabBar()}
+    </div></div></div>
   );
 }
