@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { MapContainer, TileLayer, Marker, Popup } from "react-leaflet";
 import L from "leaflet";
 import { RUN_CLUBS, VIBE_TAGS } from "./data/clubs";
+import Logo from "./Logo";
 import {
   supabase,
   signInWithGoogle,
@@ -95,8 +96,7 @@ function SignInScreen({ onEmailSent }) {
       <div className="auth-bg" />
       <div className="auth-content">
         <div className="auth-logo-wrap">
-          <div className="auth-logo">PM</div>
-          <div className="auth-wordmark">PACEMAP</div>
+          <Logo full />
         </div>
         <div className="auth-card" style={{ textAlign: "center", gap: 16 }}>
           <div style={{ fontSize: 40 }}>📬</div>
@@ -113,9 +113,8 @@ function SignInScreen({ onEmailSent }) {
       <div className="auth-bg" />
       <div className="auth-content">
         <div className="auth-logo-wrap">
-          <div className="auth-logo">PM</div>
-          <div className="auth-wordmark">PACEMAP</div>
-          <div className="auth-tagline">Find your running tribe, anywhere.</div>
+          <Logo full />
+          <div className="auth-tagline" style={{marginTop:4}}>Find your running tribe, anywhere.</div>
         </div>
 
         <div className="auth-card">
@@ -386,7 +385,7 @@ function DiscoverScreen({ onClubSelect, savedIds, onSaveToggle, userId }) {
   });
   return (
     <div className="screen">
-      <div className="top-bar"><div className="pm-logo">PM</div><div className="top-title">PACEMAP</div><div className="top-icon"><i className="ti ti-bell" /></div></div>
+      <div className="top-bar"><Logo size={28} /><div className="top-title">PACEMAP</div><div className="top-icon"><i className="ti ti-bell" /></div></div>
       <div className="hero-block"><div className="hero-kicker">FIND YOUR TRIBE</div><div className="hero-h1">Run clubs<br/>near you</div></div>
       <div className="search-bar">
         <i className="ti ti-search" />
@@ -416,7 +415,7 @@ function MapScreen({ onClubSelect }) {
   const validClubs = RUN_CLUBS.filter(c => c.lat && c.lng);
   return (
     <div className="screen map-screen">
-      <div className="top-bar"><div className="pm-logo">PM</div><div className="top-title">WORLD MAP</div><div className="top-icon"><i className="ti ti-current-location" /></div></div>
+      <div className="top-bar"><Logo size={28} /><div className="top-title">WORLD MAP</div><div className="top-icon"><i className="ti ti-current-location" /></div></div>
       <div className="map-container">
         <MapContainer center={[48, 10]} zoom={3} style={{ width: "100%", height: "100%" }} zoomControl={false} attributionControl={false}>
           <TileLayer url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png" maxZoom={18} />
@@ -633,7 +632,7 @@ function LoadingScreen() {
     <div className="auth-screen">
       <div className="auth-bg" />
       <div className="auth-content">
-        <div className="auth-logo">PM</div>
+        <Logo size={48} />
         <div className="loading-dots"><span /><span /><span /></div>
       </div>
     </div>
