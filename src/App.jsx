@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { MapContainer, TileLayer, Marker, Popup } from "react-leaflet";
 import L from "leaflet";
 import { RUN_CLUBS, VIBE_TAGS } from "./data/clubs";
@@ -14,6 +14,22 @@ import {
   getSavedClubs,
   saveClub,
   unsaveClub,
+  getTrips,
+  createTrip,
+  updateTrip,
+  createTripStop,
+  updateTripStop,
+  deleteTripStop,
+  getRunners,
+  getActivityFeed,
+  followUser,
+  unfollowUser,
+  getConversations,
+  getMessages,
+  sendMessage,
+  subscribeToMessages,
+  markMessagesRead,
+  getFollowing,
 } from "./supabase";
 import "./App.css";
 
@@ -51,7 +67,7 @@ const SAMPLE_TRIP = {
   ],
 };
 
-const CITIES_LIST = ["Dublin", "London", "Madrid", "Barcelona", "Valencia", "Amsterdam", "Paris", "New York", "Bangkok", "Rome", "Milan", "Lisbon", "Berlin", "Vienna", "Stockholm", "Other"];
+const CITIES_LIST = ["Dublin", "London", "Madrid", "Barcelona", "Valencia", "Amsterdam", "Paris", "New York", "Bangkok", "Tokyo", "Rome", "Milan", "Lisbon", "Berlin", "Vienna", "Stockholm", "Other"];
 const PACE_OPTIONS = ["<5:00 /km", "5:00–5:30 /km", "5:30–6:30 /km", "6:30–7:30 /km", "7:30+ /km", "Just vibes 🤙"];
 const PRESET_AVATARS = [
   { id: "a", bg: "linear-gradient(135deg,#FC4C02,#ff8c00)" },
@@ -375,7 +391,7 @@ function DiscoverScreen({ onClubSelect, savedIds, onSaveToggle, userId }) {
   const [search, setSearch] = useState("");
   const [activeCity, setActiveCity] = useState("All");
   const [activeTags, setActiveTags] = useState([]);
-  const cities = ["All", "Dublin", "London", "Valencia", "Madrid", "Amsterdam", "Paris", "New York", "Bangkok"];
+  const cities = ["All", "Dublin", "London", "Valencia", "Madrid", "Amsterdam", "Paris", "New York", "Bangkok", "Tokyo"];
   const toggleTag = t => setActiveTags(p => p.includes(t) ? p.filter(x => x !== t) : [...p, t]);
   const filtered = RUN_CLUBS.filter(c => {
     const ms = !search || c.name.toLowerCase().includes(search.toLowerCase()) || c.city.toLowerCase().includes(search.toLowerCase());
@@ -438,137 +454,670 @@ function MapScreen({ onClubSelect }) {
   );
 }
 
-function TripScreen({ onClubSelect }) {
-  const [isPublic, setIsPublic] = useState(true);
+function TripScreen({ session, onClubSelect, savedIds, onSaveToggle }) {
+  const [trips, setTrips] = useState([]);
+  const [activeIdx, setActiveIdx] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [creating, setCreating] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [editingStop, setEditingStop] = useState(null); // stopId
+  const [editCity, setEditCity] = useState("");
+  const [editDate, setEditDate] = useState("");
+
+  const userId = session?.user?.id;
+
+  useEffect(() => {
+    if (!userId) { setLoading(false); return; }
+    loadTrips();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
+
+  const loadTrips = async () => {
+    setLoading(true);
+    const { data } = await getTrips(userId);
+    const loaded = (data || []).map(t => ({
+      ...t,
+      trip_stops: (t.trip_stops || []).sort((a, b) => a.sort_order - b.sort_order),
+    }));
+    setTrips(loaded);
+    setLoading(false);
+  };
+
+  const activeTrip = trips[activeIdx] || null;
+
+  const handleCreateTrip = async () => {
+    if (!newName.trim()) return;
+    const { data } = await createTrip(userId, { name: newName.trim(), dates: "", is_public: true });
+    if (data) {
+      const newTrip = { ...data, trip_stops: [] };
+      setTrips(prev => [newTrip, ...prev]);
+      setActiveIdx(0);
+    }
+    setCreating(false);
+    setNewName("");
+  };
+
+  const handleToggleStop = async (stop) => {
+    const updates = { done: !stop.done };
+    await updateTripStop(stop.id, updates);
+    setTrips(prev => prev.map((t, i) => i !== activeIdx ? t : {
+      ...t,
+      trip_stops: t.trip_stops.map(s => s.id === stop.id ? { ...s, ...updates } : s),
+    }));
+  };
+
+  const handleTogglePublic = async () => {
+    if (!activeTrip) return;
+    const updates = { is_public: !activeTrip.is_public };
+    await updateTrip(activeTrip.id, updates);
+    setTrips(prev => prev.map((t, i) => i !== activeIdx ? t : { ...t, ...updates }));
+  };
+
+  const handleAddStop = async () => {
+    if (!activeTrip) return;
+    const sort_order = (activeTrip.trip_stops?.length || 0);
+    const { data } = await createTripStop(activeTrip.id, {
+      city: "New City", date: "", club_name: null, club_emoji: null, done: false, sort_order,
+    });
+    if (data) {
+      setTrips(prev => prev.map((t, i) => i !== activeIdx ? t : {
+        ...t, trip_stops: [...(t.trip_stops || []), data],
+      }));
+    }
+  };
+
+  const handleDeleteStop = async (stopId) => {
+    await deleteTripStop(stopId);
+    setTrips(prev => prev.map((t, i) => i !== activeIdx ? t : {
+      ...t, trip_stops: t.trip_stops.filter(s => s.id !== stopId),
+    }));
+  };
+
+  const startEditStop = (stop) => {
+    setEditingStop(stop.id);
+    setEditCity(stop.city);
+    setEditDate(stop.date || "");
+  };
+
+  const saveEditStop = async (stop) => {
+    const updates = { city: editCity.trim() || stop.city, date: editDate.trim() };
+    await updateTripStop(stop.id, updates);
+    setTrips(prev => prev.map((t, i) => i !== activeIdx ? t : {
+      ...t, trip_stops: t.trip_stops.map(s => s.id === stop.id ? { ...s, ...updates } : s),
+    }));
+    setEditingStop(null);
+  };
+
+  const nextCity = activeTrip?.trip_stops?.find(s => !s.done)?.city || null;
+  const suggestedClubs = nextCity ? RUN_CLUBS.filter(c => c.city === nextCity).slice(0, 3) : [];
+
+  if (!userId) return (
+    <div className="screen">
+      <div className="top-bar"><div className="top-title">TRIP PLANNER</div></div>
+      <div style={{padding:"48px 24px",textAlign:"center",color:"#888"}}>
+        <div style={{fontSize:40,marginBottom:12}}>✈️</div>
+        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,color:"#fff",marginBottom:8}}>Plan your running trips</div>
+        <div style={{fontSize:14}}>Sign in to create multi-city trip plans</div>
+      </div>
+    </div>
+  );
+
+  if (loading) return (
+    <div className="screen">
+      <div className="top-bar"><div className="top-title">TRIP PLANNER</div></div>
+      <div style={{padding:"48px 24px",textAlign:"center",color:"#888"}}>Loading trips…</div>
+    </div>
+  );
+
   return (
     <div className="screen">
-      <div className="top-bar"><div className="top-title">TRIP PLANNER</div><button className="new-trip-btn"><i className="ti ti-plus" /> New trip</button></div>
-      <div className="trip-card">
-        <div className="trip-header">
-          <div><div className="trip-name">{SAMPLE_TRIP.name}</div><div className="trip-dates">{SAMPLE_TRIP.dates} · {SAMPLE_TRIP.stops.length} cities</div></div>
-          <div className="trip-right">
-            <div className="trip-prog">{SAMPLE_TRIP.stops.filter(s => s.done).length}/{SAMPLE_TRIP.stops.length}</div>
-            <button className={`privacy-btn ${isPublic ? "pub" : "priv"}`} onClick={() => setIsPublic(!isPublic)}>
-              <i className={`ti ti-${isPublic ? "world" : "lock"}`} /><span>{isPublic ? "Public" : "Private"}</span>
-            </button>
-          </div>
+      <div className="top-bar">
+        <div className="top-title">TRIP PLANNER</div>
+        <button className="new-trip-btn" onClick={() => setCreating(true)}><i className="ti ti-plus" /> New trip</button>
+      </div>
+
+      {creating && (
+        <div className="create-trip-bar">
+          <input
+            className="trip-name-input"
+            placeholder="Trip name…"
+            value={newName}
+            onChange={e => setNewName(e.target.value)}
+            onKeyDown={e => { if (e.key === "Enter") handleCreateTrip(); if (e.key === "Escape") setCreating(false); }}
+            autoFocus
+          />
+          <button className="trip-save-btn" onClick={handleCreateTrip} disabled={!newName.trim()}>Save</button>
+          <button className="trip-cancel-btn" onClick={() => setCreating(false)}>✕</button>
         </div>
-        <div className="trip-timeline">
-          {SAMPLE_TRIP.stops.map((stop, i) => (
-            <div key={i}>
-              <div className="timeline-stop">
-                <div className={`stop-dot ${stop.done ? "done" : ""}`} />
-                <div className="stop-info">
-                  <div className="stop-city">{stop.city}</div>
-                  <div className="stop-detail">{stop.club ? `${stop.emoji} ${stop.club} · ${stop.time}` : <span style={{color:"#FC4C02"}}>No club selected</span>}</div>
-                  {stop.alsoGoing.length > 0 && (
-                    <div className="also-going">
-                      {stop.alsoGoing.slice(0,3).map(u => <div key={u.id} className="mini-avatar">{u.avatar}</div>)}
-                      <span className="also-txt">{stop.alsoGoing.length} friend{stop.alsoGoing.length > 1 ? "s" : ""} going</span>
-                    </div>
-                  )}
-                </div>
-                <div className="stop-date">{stop.date}</div>
-              </div>
-              {i < SAMPLE_TRIP.stops.length - 1 && <div className="timeline-line" />}
-            </div>
+      )}
+
+      {trips.length > 1 && (
+        <div className="pill-row" style={{padding:"0 16px 4px"}}>
+          {trips.map((t, i) => (
+            <button key={t.id} className={`city-pill ${i === activeIdx ? "active" : ""}`} onClick={() => setActiveIdx(i)}>
+              {t.name}
+            </button>
           ))}
         </div>
-      </div>
-      <div className="sec-head"><span className="sec-lbl">SUGGESTED FOR MADRID</span></div>
-      <div className="notif-card orange"><div className="notif-dot orange" /><div className="notif-body"><div className="notif-title">Pick a club for Madrid</div><div className="notif-sub">You arrive Jun 25 · Ana García is running TRC that week</div></div></div>
-      {RUN_CLUBS.filter(c => c.city === "Madrid").map(c => <ClubCard key={c.id} club={c} onSelect={onClubSelect} />)}
+      )}
+
+      {!activeTrip ? (
+        <div style={{padding:"48px 24px",textAlign:"center",color:"#888"}}>
+          <div style={{fontSize:40,marginBottom:12}}>🗺️</div>
+          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,color:"#fff",marginBottom:8}}>No trips yet</div>
+          <div style={{fontSize:14,marginBottom:20}}>Plan your next running adventure</div>
+          <button className="onboard-next" style={{margin:"0 auto",maxWidth:200}} onClick={() => setCreating(true)}>
+            + Create first trip
+          </button>
+        </div>
+      ) : (
+        <>
+          <div className="trip-card">
+            <div className="trip-header">
+              <div>
+                <div className="trip-name">{activeTrip.name}</div>
+                <div className="trip-dates">
+                  {activeTrip.dates || "No dates set"} · {activeTrip.trip_stops?.length || 0} {activeTrip.trip_stops?.length === 1 ? "city" : "cities"}
+                </div>
+              </div>
+              <div className="trip-right">
+                <div className="trip-prog">
+                  {activeTrip.trip_stops?.filter(s => s.done).length || 0}/{activeTrip.trip_stops?.length || 0}
+                </div>
+                <button
+                  className={`privacy-btn ${activeTrip.is_public ? "pub" : "priv"}`}
+                  onClick={handleTogglePublic}
+                >
+                  <i className={`ti ti-${activeTrip.is_public ? "world" : "lock"}`} />
+                  <span>{activeTrip.is_public ? "Public" : "Private"}</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="trip-timeline">
+              {(activeTrip.trip_stops || []).map((stop, i) => (
+                <div key={stop.id}>
+                  <div className="timeline-stop">
+                    <button className={`stop-dot ${stop.done ? "done" : ""}`} onClick={() => handleToggleStop(stop)} title={stop.done ? "Mark undone" : "Mark done"} />
+                    <div className="stop-info">
+                      {editingStop === stop.id ? (
+                        <div className="stop-edit-row">
+                          <input
+                            className="stop-edit-input city"
+                            value={editCity}
+                            onChange={e => setEditCity(e.target.value)}
+                            placeholder="City"
+                            onKeyDown={e => { if (e.key === "Enter") saveEditStop(stop); if (e.key === "Escape") setEditingStop(null); }}
+                            autoFocus
+                          />
+                          <input
+                            className="stop-edit-input date"
+                            value={editDate}
+                            onChange={e => setEditDate(e.target.value)}
+                            placeholder="Date"
+                          />
+                          <button className="stop-edit-save" onClick={() => saveEditStop(stop)}>✓</button>
+                          <button className="stop-edit-cancel" onClick={() => setEditingStop(null)}>✕</button>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="stop-city" onClick={() => startEditStop(stop)} style={{cursor:"pointer"}}>
+                            {stop.city}
+                            <i className="ti ti-pencil" style={{marginLeft:4,fontSize:11,color:"#555",opacity:.7}} />
+                          </div>
+                          <div className="stop-detail">
+                            {stop.club_name
+                              ? `${stop.club_emoji || "🏃"} ${stop.club_name}`
+                              : <span style={{color:"#FC4C02",fontSize:12}}>No club selected</span>
+                            }
+                          </div>
+                        </>
+                      )}
+                    </div>
+                    <div style={{display:"flex",alignItems:"center",gap:6}}>
+                      <div className="stop-date">{stop.date || "—"}</div>
+                      <button className="stop-delete-btn" onClick={() => handleDeleteStop(stop.id)} title="Remove stop">
+                        <i className="ti ti-trash" />
+                      </button>
+                    </div>
+                  </div>
+                  {i < (activeTrip.trip_stops?.length || 0) - 1 && <div className="timeline-line" />}
+                </div>
+              ))}
+            </div>
+
+            <button className="add-stop-btn" onClick={handleAddStop}>
+              <i className="ti ti-plus" /> Add city
+            </button>
+          </div>
+
+          {suggestedClubs.length > 0 && (
+            <>
+              <div className="sec-head">
+                <span className="sec-lbl">SUGGESTED FOR {nextCity.toUpperCase()}</span>
+              </div>
+              <div className="notif-card orange">
+                <div className="notif-dot orange" />
+                <div className="notif-body">
+                  <div className="notif-title">Pick a club for {nextCity}</div>
+                  <div className="notif-sub">Your next unvisited stop</div>
+                </div>
+              </div>
+              {suggestedClubs.map(c => (
+                <ClubCard key={c.id} club={c} onSelect={onClubSelect} savedIds={savedIds} onSaveToggle={onSaveToggle} userId={userId} />
+              ))}
+            </>
+          )}
+        </>
+      )}
     </div>
   );
 }
 
-function SocialScreen() {
-  const [users, setUsers] = useState(USERS);
+function SocialScreen({ session, onMessageUser }) {
   const [tab, setTab] = useState("feed");
-  const toggleFollow = id => setUsers(prev => prev.map(u => u.id === id ? {...u, following: !u.following} : u));
+  const [runners, setRunners] = useState([]);
+  const [feed, setFeed] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [followLoading, setFollowLoading] = useState(new Set());
+
+  const userId = session?.user?.id;
+
+  useEffect(() => {
+    if (!userId) { setLoading(false); return; }
+    loadAll();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
+
+  const loadAll = async () => {
+    setLoading(true);
+    const [{ data: r }, { data: f }] = await Promise.all([
+      getRunners(userId),
+      getActivityFeed(userId),
+    ]);
+    setRunners(r || []);
+    setFeed(f || []);
+    setLoading(false);
+  };
+
+  const handleFollowToggle = async (runner) => {
+    setFollowLoading(prev => new Set([...prev, runner.id]));
+    if (runner.isFollowing) {
+      await unfollowUser(userId, runner.id);
+    } else {
+      await followUser(userId, runner.id);
+    }
+    setRunners(prev => prev.map(r => r.id === runner.id ? { ...r, isFollowing: !r.isFollowing } : r));
+    setFollowLoading(prev => { const s = new Set(prev); s.delete(runner.id); return s; });
+    // Refresh feed since follow state changed
+    const { data: f } = await getActivityFeed(userId);
+    setFeed(f || []);
+  };
+
+  const timeAgo = (dateStr) => {
+    if (!dateStr) return "";
+    const d = new Date(dateStr);
+    const diff = Math.floor((Date.now() - d.getTime()) / 1000);
+    if (diff < 60) return `${diff}s ago`;
+    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+    return `${Math.floor(diff / 86400)}d ago`;
+  };
+
+  const getClubInfo = (clubId) => {
+    const club = RUN_CLUBS.find(c => c.id === clubId);
+    return club ? { name: club.name, emoji: club.emoji, city: club.city } : { name: `Club #${clubId}`, emoji: "🏃", city: "" };
+  };
+
+  if (!userId) return (
+    <div className="screen">
+      <div className="top-bar"><div className="top-title">COMMUNITY</div></div>
+      <div style={{padding:"48px 24px",textAlign:"center",color:"#888"}}>
+        <div style={{fontSize:40,marginBottom:12}}>👥</div>
+        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,color:"#fff",marginBottom:8}}>Find your running tribe</div>
+        <div style={{fontSize:14}}>Sign in to follow runners and see their activity</div>
+      </div>
+    </div>
+  );
+
   return (
     <div className="screen">
-      <div className="top-bar"><div className="top-title">COMMUNITY</div><div className="top-icon"><i className="ti ti-user-search" /></div></div>
+      <div className="top-bar">
+        <div className="top-title">COMMUNITY</div>
+        <div className="top-icon"><i className="ti ti-user-search" /></div>
+      </div>
       <div className="social-tabs">
         <button className={`s-tab ${tab === "feed" ? "active" : ""}`} onClick={() => setTab("feed")}>Feed</button>
         <button className={`s-tab ${tab === "runners" ? "active" : ""}`} onClick={() => setTab("runners")}>Runners</button>
       </div>
+
       {tab === "feed" && (
         <div className="feed">
-          {ACTIVITY_FEED.map(item => (
-            <div key={item.id} className="feed-item">
-              <Avatar user={item.user} size={38} />
-              <div className="feed-body">
-                <div className="feed-text"><span className="feed-name">{item.user.name}</span> {item.action} <span className="feed-club">{item.emoji} {item.club}</span></div>
-                <div className="feed-meta">{item.city} · {item.time}</div>
-              </div>
+          {loading ? (
+            <div style={{padding:"32px",textAlign:"center",color:"#666"}}>Loading feed…</div>
+          ) : feed.length === 0 ? (
+            <div style={{padding:"48px 24px",textAlign:"center",color:"#888"}}>
+              <div style={{fontSize:32,marginBottom:8}}>🏃</div>
+              <div style={{color:"#ccc",fontWeight:600,marginBottom:6}}>Nothing in the feed yet</div>
+              <div style={{fontSize:13}}>Follow runners to see their activity here</div>
             </div>
-          ))}
+          ) : (
+            feed.map((item, idx) => {
+              const club = getClubInfo(item.club_id);
+              const user = item.profiles;
+              return (
+                <div key={item.club_id + '-' + idx} className="feed-item">
+                  <Avatar user={user || {}} size={38} />
+                  <div className="feed-body">
+                    <div className="feed-text">
+                      <span className="feed-name">{user?.name || "Runner"}</span>{" "}
+                      saved <span className="feed-club">{club.emoji} {club.name}</span>
+                    </div>
+                    <div className="feed-meta">{club.city} · {timeAgo(item.saved_at)}</div>
+                  </div>
+                </div>
+              );
+            })
+          )}
         </div>
       )}
+
       {tab === "runners" && (
         <div className="runners-list">
-          {users.map(u => (
-            <div key={u.id} className="runner-card">
-              <Avatar user={u} size={44} />
-              <div className="runner-info">
-                <div className="runner-name">{u.name}</div>
-                <div className="runner-handle">{u.handle} · {u.city}</div>
-                {u.mutual > 0 && <div className="runner-mutual">{u.mutual} mutual runners</div>}
-              </div>
-              <button className={`follow-btn ${u.following ? "following" : ""}`} onClick={() => toggleFollow(u.id)}>{u.following ? "Following" : "Follow"}</button>
+          {loading ? (
+            <div style={{padding:"32px",textAlign:"center",color:"#666"}}>Loading runners…</div>
+          ) : runners.length === 0 ? (
+            <div style={{padding:"48px 24px",textAlign:"center",color:"#888"}}>
+              <div style={{fontSize:32,marginBottom:8}}>👟</div>
+              <div style={{color:"#ccc",fontWeight:600}}>No other runners yet</div>
+              <div style={{fontSize:13,marginTop:6}}>Invite friends to join Pacemap!</div>
             </div>
-          ))}
+          ) : (
+            runners.map(u => (
+              <div key={u.id} className="runner-card">
+                <Avatar user={u} size={44} />
+                <div className="runner-info">
+                  <div className="runner-name">{u.name}</div>
+                  <div className="runner-handle">{u.handle || "@runner"} · {u.city || "Everywhere"}</div>
+                </div>
+                <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                  {onMessageUser && (
+                    <button
+                      className="msg-quick-btn"
+                      onClick={() => onMessageUser(u)}
+                      title="Message"
+                    ><i className="ti ti-message" /></button>
+                  )}
+                  <button
+                    className={`follow-btn ${u.isFollowing ? "following" : ""}`}
+                    disabled={followLoading.has(u.id)}
+                    onClick={() => handleFollowToggle(u)}
+                  >
+                    {followLoading.has(u.id) ? "…" : u.isFollowing ? "Following" : "Follow"}
+                  </button>
+                </div>
+              </div>
+            ))
+          )}
         </div>
       )}
     </div>
   );
 }
 
-function MessagesScreen() {
-  const [activeConvo, setActiveConvo] = useState(null);
+function MessagesScreen({ session, initialPartner, onPartnerHandled }) {
+  const [convos, setConvos] = useState([]);
+  const [activePartner, setActivePartner] = useState(null); // profile obj
+  const [msgs, setMsgs] = useState([]);
   const [input, setInput] = useState("");
-  const [msgs, setMsgs] = useState([
-    { from: "them", text: "Are you doing the Wednesday pizza run?", time: "2:14pm" },
-    { from: "me", text: "Yes! See you at 7pm 🍕", time: "2:16pm" },
-    { from: "them", text: "Amazing! Bringing 2 friends too", time: "2:17pm" },
-  ]);
-  const send = () => { if (input.trim()) { setMsgs(p => [...p, { from: "me", text: input, time: "now" }]); setInput(""); } };
+  const [loadingConvos, setLoadingConvos] = useState(true);
+  const [loadingMsgs, setLoadingMsgs] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [composing, setComposing] = useState(false);
+  const [follows, setFollows] = useState([]);
+  const channelRef = useRef(null);
+  const bodyRef = useRef(null);
 
-  if (activeConvo) return (
-    <div className="screen messages-screen">
-      <div className="convo-header">
-        <button className="back-btn sm" onClick={() => setActiveConvo(null)}><i className="ti ti-arrow-left" /></button>
-        <Avatar user={activeConvo.user} size={32} />
-        <div className="convo-name">{activeConvo.user.name}</div>
-      </div>
-      <div className="convo-body">
-        {msgs.map((m, i) => (
-          <div key={i} className={`bubble-wrap ${m.from}`}>
-            <div className={`bubble ${m.from === "me" ? "mine" : "theirs"}`}>{m.text}</div>
-            <div className="bubble-time">{m.time}</div>
-          </div>
-        ))}
-      </div>
-      <div className="msg-input-bar">
-        <input value={input} onChange={e => setInput(e.target.value)} placeholder="Message..." className="msg-input" onKeyDown={e => e.key === "Enter" && send()} />
-        <button className="send-btn" onClick={send}><i className="ti ti-send" /></button>
+  const userId = session?.user?.id;
+
+  // Load conversations on mount
+  useEffect(() => {
+    if (!userId) { setLoadingConvos(false); return; }
+    loadConvos();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
+
+  // Handle initialPartner from Social screen (navigate-to-message)
+  useEffect(() => {
+    if (initialPartner && userId) {
+      openConvo(initialPartner);
+      if (onPartnerHandled) onPartnerHandled();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialPartner]);
+
+  // Auto-scroll to bottom when messages load or new message arrives
+  useEffect(() => {
+    if (bodyRef.current) {
+      bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
+    }
+  }, [msgs]);
+
+  const loadConvos = async () => {
+    setLoadingConvos(true);
+    const { data } = await getConversations(userId);
+    setConvos(data || []);
+    setLoadingConvos(false);
+  };
+
+  const openConvo = async (partner) => {
+    setActivePartner(partner);
+    setLoadingMsgs(true);
+    setMsgs([]);
+
+    // Unsubscribe previous channel
+    if (channelRef.current) {
+      channelRef.current.unsubscribe();
+      channelRef.current = null;
+    }
+
+    const { data } = await getMessages(userId, partner.id);
+    setMsgs(data || []);
+    setLoadingMsgs(false);
+
+    // Mark incoming messages as read
+    await markMessagesRead(userId, partner.id);
+
+    // Subscribe to realtime for new incoming messages
+    channelRef.current = subscribeToMessages(userId, partner.id, (newMsg) => {
+      setMsgs(prev => [...prev, newMsg]);
+    });
+
+    // Refresh convos list to update unread counts
+    const { data: updated } = await getConversations(userId);
+    setConvos(updated || []);
+  };
+
+  const closeConvo = async () => {
+    if (channelRef.current) {
+      channelRef.current.unsubscribe();
+      channelRef.current = null;
+    }
+    setActivePartner(null);
+    setMsgs([]);
+    // Reload conversations to get fresh state
+    await loadConvos();
+  };
+
+  const handleSend = async () => {
+    if (!input.trim() || !activePartner || sending) return;
+    const text = input.trim();
+    setInput("");
+    setSending(true);
+
+    // Optimistic update
+    const tempMsg = {
+      id: `temp-${Date.now()}`,
+      sender_id: userId,
+      receiver_id: activePartner.id,
+      content: text,
+      created_at: new Date().toISOString(),
+    };
+    setMsgs(prev => [...prev, tempMsg]);
+
+    const { data: sent } = await sendMessage(userId, activePartner.id, text);
+    // Replace temp message with real one
+    if (sent) {
+      setMsgs(prev => prev.map(m => m.id === tempMsg.id ? sent : m));
+    }
+    setSending(false);
+
+    // Refresh convos list
+    const { data: updated } = await getConversations(userId);
+    setConvos(updated || []);
+  };
+
+  const loadFollowsForCompose = async () => {
+    const { data } = await getFollowing(userId);
+    setFollows((data || []).map(f => f.profiles).filter(Boolean));
+    setComposing(true);
+  };
+
+  const formatTime = (dateStr) => {
+    if (!dateStr) return "";
+    const d = new Date(dateStr);
+    const now = new Date();
+    const diff = Math.floor((now - d) / 1000);
+    if (diff < 3600) return `${Math.floor(diff / 60)}m`;
+    if (diff < 86400) return `${Math.floor(diff / 3600)}h`;
+    return d.toLocaleDateString([], { month: "short", day: "numeric" });
+  };
+
+  const formatMsgTime = (dateStr) => {
+    if (!dateStr) return "";
+    return new Date(dateStr).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  };
+
+  if (!userId) return (
+    <div className="screen">
+      <div className="top-bar"><div className="top-title">MESSAGES</div></div>
+      <div style={{padding:"48px 24px",textAlign:"center",color:"#888"}}>
+        <div style={{fontSize:40,marginBottom:12}}>💬</div>
+        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,color:"#fff",marginBottom:8}}>Message other runners</div>
+        <div style={{fontSize:14}}>Sign in to send and receive messages</div>
       </div>
     </div>
   );
 
+  // Compose: pick who to message
+  if (composing) return (
+    <div className="screen">
+      <div className="convo-header">
+        <button className="back-btn sm" onClick={() => setComposing(false)}><i className="ti ti-arrow-left" /></button>
+        <div className="convo-name">New message</div>
+      </div>
+      <div className="runners-list">
+        {follows.length === 0 ? (
+          <div style={{padding:"32px",textAlign:"center",color:"#888"}}>
+            Follow runners from the Community tab to message them
+          </div>
+        ) : (
+          follows.map(u => (
+            <div key={u.id} className="runner-card" style={{cursor:"pointer"}} onClick={() => { setComposing(false); openConvo(u); }}>
+              <Avatar user={u} size={44} />
+              <div className="runner-info">
+                <div className="runner-name">{u.name}</div>
+                <div className="runner-handle">{u.handle || "@runner"} · {u.city || ""}</div>
+              </div>
+              <i className="ti ti-chevron-right" style={{color:"#555"}} />
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+
+  // Active conversation view
+  if (activePartner) return (
+    <div className="screen messages-screen">
+      <div className="convo-header">
+        <button className="back-btn sm" onClick={closeConvo}><i className="ti ti-arrow-left" /></button>
+        <Avatar user={activePartner} size={32} />
+        <div className="convo-name">{activePartner.name}</div>
+      </div>
+      <div className="convo-body" ref={bodyRef}>
+        {loadingMsgs ? (
+          <div style={{padding:"32px",textAlign:"center",color:"#666"}}>Loading messages…</div>
+        ) : msgs.length === 0 ? (
+          <div style={{padding:"32px",textAlign:"center",color:"#666"}}>
+            <div style={{marginBottom:8}}>👋</div>
+            <div>Say hi to {activePartner.name?.split(" ")[0]}!</div>
+          </div>
+        ) : (
+          msgs.map((m) => {
+            const isMe = m.sender_id === userId;
+            return (
+              <div key={m.id} className={`bubble-wrap ${isMe ? "me" : "them"}`}>
+                <div className={`bubble ${isMe ? "mine" : "theirs"}`}>{m.content}</div>
+                <div className="bubble-time">{formatMsgTime(m.created_at)}</div>
+              </div>
+            );
+          })
+        )}
+      </div>
+      <div className="msg-input-bar">
+        <input
+          value={input}
+          onChange={e => setInput(e.target.value)}
+          placeholder="Message..."
+          className="msg-input"
+          onKeyDown={e => e.key === "Enter" && handleSend()}
+          disabled={sending}
+        />
+        <button className="send-btn" onClick={handleSend} disabled={!input.trim() || sending}>
+          <i className="ti ti-send" />
+        </button>
+      </div>
+    </div>
+  );
+
+  // Conversations list
   return (
     <div className="screen">
-      <div className="top-bar"><div className="top-title">MESSAGES</div><div className="top-icon"><i className="ti ti-edit" /></div></div>
-      <div className="msg-list">
-        {MESSAGES_DATA.map(m => (
-          <div key={m.id} className="msg-row" onClick={() => setActiveConvo(m)}>
-            <div style={{position:"relative"}}><Avatar user={m.user} size={44} />{m.unread > 0 && <div className="unread-badge">{m.unread}</div>}</div>
-            <div className="msg-info"><div className="msg-name">{m.user.name}</div><div className="msg-preview">{m.last}</div></div>
-            <div className="msg-time">{m.time}</div>
-          </div>
-        ))}
+      <div className="top-bar">
+        <div className="top-title">MESSAGES</div>
+        <button className="top-icon" onClick={loadFollowsForCompose} title="New message">
+          <i className="ti ti-edit" />
+        </button>
       </div>
+      {loadingConvos ? (
+        <div style={{padding:"32px",textAlign:"center",color:"#666"}}>Loading…</div>
+      ) : convos.length === 0 ? (
+        <div style={{padding:"48px 24px",textAlign:"center",color:"#888"}}>
+          <div style={{fontSize:40,marginBottom:12}}>💬</div>
+          <div style={{color:"#ccc",fontWeight:600,marginBottom:6}}>No messages yet</div>
+          <div style={{fontSize:13,marginBottom:20}}>Follow runners in Community to message them</div>
+          <button className="follow-btn" style={{margin:"0 auto"}} onClick={loadFollowsForCompose}>
+            <i className="ti ti-edit" /> New message
+          </button>
+        </div>
+      ) : (
+        <div className="msg-list">
+          {convos.map(c => (
+            <div key={c.partnerId} className="msg-row" onClick={() => openConvo(c.partner)}>
+              <div style={{position:"relative"}}>
+                <Avatar user={c.partner} size={44} />
+                {c.unreadCount > 0 && <div className="unread-badge">{c.unreadCount}</div>}
+              </div>
+              <div className="msg-info">
+                <div className="msg-name">{c.partner?.name || "Runner"}</div>
+                <div className="msg-preview">{c.lastMessage?.content || ""}</div>
+              </div>
+              <div className="msg-time">{formatTime(c.lastMessage?.created_at)}</div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -655,6 +1204,7 @@ export default function App() {
   const [savedIds, setSavedIds] = useState(new Set());
   const [tab, setTab] = useState("discover");
   const [selectedClub, setSelectedClub] = useState(null);
+  const [messageTo, setMessageTo] = useState(null); // profile to open DM with
 
   // ── Load session on mount ──────────────────────────────────────────────────
   useEffect(() => {
@@ -745,9 +1295,9 @@ export default function App() {
       <div className="screen-content">
         {tab === "discover" && <DiscoverScreen onClubSelect={setSelectedClub} savedIds={savedIds} onSaveToggle={handleSaveToggle} userId={session?.user?.id} />}
         {tab === "map" && <MapScreen onClubSelect={setSelectedClub} />}
-        {tab === "trip" && <TripScreen onClubSelect={setSelectedClub} />}
-        {tab === "social" && <SocialScreen />}
-        {tab === "messages" && <MessagesScreen />}
+        {tab === "trip" && <TripScreen session={session} onClubSelect={setSelectedClub} savedIds={savedIds} onSaveToggle={handleSaveToggle} />}
+        {tab === "social" && <SocialScreen session={session} onMessageUser={u => { setMessageTo(u); setTab("messages"); }} />}
+        {tab === "messages" && <MessagesScreen session={session} initialPartner={messageTo} onPartnerHandled={() => setMessageTo(null)} />}
         {tab === "profile" && <ProfileScreen profile={profile} savedIds={savedIds} onSignOut={handleSignOut} />}
       </div>
       {renderTabBar()}
